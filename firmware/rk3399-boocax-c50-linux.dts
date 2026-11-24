@@ -4,6 +4,7 @@
 / {
 	aliases {
 		ethernet0 = &gmac;
+		serial0 = &uart0;
 	};
 
 	clkin_gmac: external-gmac-clock {
@@ -20,10 +21,93 @@
 		enable-active-high;
 		regulator-always-on;
 	};
+
+	wifi_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rk818 1>;
+		clock-names = "ext_clock";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_reg_on>;
+		reset-gpios = <&gpio0 RK_PB2 GPIO_ACTIVE_LOW>;
+	};
+
+	gpio-leds {
+		compatible = "gpio-leds";
+		pinctrl-names = "default";
+		pinctrl-0 = <&board_leds>;
+
+		led-red {
+			label = "red_led";
+			gpios = <&gpio4 RK_PA6 GPIO_ACTIVE_HIGH>;
+			default-state = "on";
+			retain-state-suspended;
+		};
+
+		led-green {
+			label = "green_led";
+			gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_HIGH>;
+			default-state = "off";
+			retain-state-suspended;
+		};
+	};
+
+	vcc5v0_host: regulator-vcc5v0-host {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_host";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&gpio4 RK_PD1 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+	};
+
+	vcc5v0_host_otg: regulator-vcc5v0-host-otg {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_host_otg";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		gpio = <&gpio1 RK_PA3 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+	};
+
+	hdmi-connector {
+		compatible = "hdmi-connector";
+		type = "a";
+
+		port {
+			hdmi_connector_in: endpoint {
+				remote-endpoint = <&hdmi_out_connector>;
+			};
+		};
+	};
+
+	rt5651-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "BooCax RT5651";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,widgets = "Microphone", "Mic Jack",
+					    "Headphone", "Headphone Jack";
+		simple-audio-card,routing = "Mic Jack", "MICBIAS1",
+					    "IN1P", "Mic Jack",
+					    "Headphone Jack", "HPOL",
+					    "Headphone Jack", "HPOR";
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s0>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&rt5651>;
+		};
+	};
 };
 
 &i2c0 {
-	pmic@1c {
+	rk818: pmic@1c {
+		#clock-cells = <1>;
+		clock-output-names = "xin32k", "wifibt_32kin";
 		regulators {
 			DCDC_REG1 {
 				regulator-name = "vdd_cpu_l";
@@ -101,12 +185,228 @@
 		compatible = "snps,dwmac-mdio";
 		#address-cells = <1>;
 		#size-cells = <0>;
+		reset-gpios = <&gpio3 RK_PB7 GPIO_ACTIVE_LOW>;
+		reset-delay-us = <10000>;
+		reset-post-delay-us = <50000>;
 
 		gmac_phy: ethernet-phy@0 {
 			reg = <0>;
-			reset-gpios = <&gpio3 RK_PB7 GPIO_ACTIVE_LOW>;
-			reset-assert-us = <10000>;
-			reset-deassert-us = <50000>;
 		};
 	};
+};
+
+&pinctrl {
+	boocax-peripherals {
+		board_leds: board-leds {
+			rockchip,pins = <4 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>,
+					<4 RK_PA7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		wifi_reg_on: wifi-reg-on {
+			rockchip,pins = <0 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		wifi_host_wake: wifi-host-wake {
+			rockchip,pins = <0 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		bt_control: bt-control {
+			rockchip,pins = <0 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>,
+					<0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>,
+					<2 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		codec_mclk: codec-mclk {
+			rockchip,pins = <4 RK_PA0 1 &pcfg_pull_none>;
+		};
+	};
+};
+
+&sdio0 {
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	non-removable;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdio0_bus4 &sdio0_cmd &sdio0_clk>;
+	sd-uhs-sdr104;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	wifi@1 {
+		compatible = "brcm,bcm4356-fmac", "brcm,bcm4329-fmac";
+		reg = <1>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_host_wake>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PA3 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "host-wake";
+	};
+};
+
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_xfer &uart0_rts &uart0_cts>;
+	uart-has-rtscts;
+	status = "okay";
+
+	bluetooth {
+		compatible = "brcm,bcm43438-bt";
+		clocks = <&rk818 1>;
+		clock-names = "lpo";
+		shutdown-gpios = <&gpio0 RK_PB1 GPIO_ACTIVE_HIGH>;
+		host-wakeup-gpios = <&gpio0 RK_PA4 GPIO_ACTIVE_HIGH>;
+		device-wakeup-gpios = <&gpio2 RK_PD2 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&bt_control>;
+	};
+};
+
+/* The on-board eMMC runs in HS400 enhanced-strobe mode in the vendor image. */
+&emmc_phy {
+	status = "okay";
+};
+
+&sdhci {
+	max-frequency = <200000000>;
+	mmc-hs400-1_8v;
+	mmc-hs400-enhanced-strobe;
+};
+
+&sdmmc {
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc_clk &sdmmc_cmd &sdmmc_cd &sdmmc_bus4>;
+};
+
+&usb_host0_ehci {
+	status = "okay";
+};
+
+&usb_host0_ohci {
+	status = "okay";
+};
+
+&usb_host1_ehci {
+	status = "okay";
+};
+
+&usb_host1_ohci {
+	status = "okay";
+};
+
+&u2phy0 {
+	status = "okay";
+};
+
+&u2phy0_host {
+	phy-supply = <&vcc5v0_host>;
+	status = "okay";
+};
+
+&u2phy0_otg {
+	status = "okay";
+};
+
+&u2phy1 {
+	status = "okay";
+};
+
+&u2phy1_host {
+	phy-supply = <&vcc5v0_host>;
+	status = "okay";
+};
+
+&u2phy1_otg {
+	status = "okay";
+};
+
+&tcphy0 {
+	status = "okay";
+};
+
+&tcphy1 {
+	status = "okay";
+};
+
+&usbdrd3_0 {
+	status = "okay";
+};
+
+&usbdrd3_1 {
+	status = "okay";
+};
+
+&usbdrd_dwc3_0 {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&usbdrd_dwc3_1 {
+	dr_mode = "host";
+	status = "okay";
+};
+
+&i2c1 {
+	i2c-scl-rising-time-ns = <300>;
+	i2c-scl-falling-time-ns = <15>;
+	status = "okay";
+
+	rt5651: audio-codec@1a {
+		compatible = "realtek,rt5651";
+		reg = <0x1a>;
+		clocks = <&cru SCLK_I2S_8CH_OUT>;
+		clock-names = "mclk";
+		#sound-dai-cells = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&codec_mclk>;
+	};
+};
+
+&i2s0 {
+	status = "okay";
+};
+
+&i2s2 {
+	status = "okay";
+};
+
+&hdmi {
+	pinctrl-names = "default";
+	pinctrl-0 = <&hdmi_i2c_xfer>;
+	status = "okay";
+};
+
+&hdmi_out {
+	hdmi_out_connector: endpoint {
+		remote-endpoint = <&hdmi_connector_in>;
+	};
+};
+
+&hdmi_sound {
+	status = "okay";
+};
+
+&vopb {
+	status = "okay";
+};
+
+&vopb_mmu {
+	status = "okay";
+};
+
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
+	status = "okay";
+};
+
+&tsadc {
+	rockchip,hw-tshut-mode = <1>;
+	rockchip,hw-tshut-polarity = <1>;
+	status = "okay";
 };

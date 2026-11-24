@@ -9,9 +9,14 @@ base_url=https://github.com/ophub/amlogic-s9xxx-armbian/releases/download/Armbia
 db=build-armbian/armbian-files/common-files/etc/model_database.conf
 board_boot=build-armbian/armbian-files/different-files/boocax-c50/bootfs
 
-mkdir -p "$board_boot/dtb/rockchip" build/output/images "$output"
+mkdir -p "$board_boot/dtb/rockchip" "$board_boot/extlinux" build/output/images "$output"
 test "$(grep -c ':boocax-c50:' "$db")" -eq 0
 printf '\n%s\n' 'r920 :BooCax C50 lab :rk3399 :rk3399-boocax-c50.dtb :NA :NA :u-boot-rockchip.bin :4GB RAM,32GB eMMC :stable/6.18.y :rockchip :rk3399 :extlinux.conf :HankLiu2020 :boocax-c50 :no' >> "$db"
+
+# Keep the bootloader's CPU operating point until board DVFS is verified.
+sed '/^[[:space:]]*APPEND[[:space:]]/ s/$/ cpufreq.off=1/' \
+    build-armbian/armbian-files/platform-files/rockchip/bootfs/extlinux/extlinux.conf.bak \
+    > "$board_boot/extlinux/extlinux.conf.bak"
 
 kernel_dir="$RUNNER_TEMP/linux-${kernel}"
 curl -fsSL --retry 3 "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${kernel}.tar.xz" -o "$RUNNER_TEMP/kernel.tar.xz"
@@ -45,21 +50,63 @@ cmp -n "$boot_bytes" -i 32768:0 "$image" "$firmware/u-boot-rockchip.bin"
 echo "Verified $boot_bytes U-Boot bytes at LBA 64"
 loop="$(sudo losetup --find --show --partscan --read-only "$image")"
 boot_mount="$(mktemp -d)"
+root_mount="$(mktemp -d)"
 cleanup() {
+    if mountpoint -q "$root_mount"; then sudo umount "$root_mount"; fi
     if mountpoint -q "$boot_mount"; then sudo umount "$boot_mount"; fi
     sudo losetup -d "$loop"
-    rmdir "$boot_mount"
+    rmdir "$boot_mount" "$root_mount"
 }
 trap cleanup EXIT
 sudo mount -o ro "${loop}p1" "$boot_mount"
+sudo mount -o ro,noload "${loop}p2" "$root_mount"
 grep -F 'rk3399-boocax-c50.dtb' "$boot_mount/extlinux/extlinux.conf"
-test -s "$boot_mount/dtb/rockchip/rk3399-boocax-c50.dtb"
-test "$(fdtget "$boot_mount/dtb/rockchip/rk3399-boocax-c50.dtb" / model)" = 'BooCax C50 V1.0'
+grep -Fw 'cpufreq.off=1' "$boot_mount/extlinux/extlinux.conf"
+dtb="$boot_mount/dtb/rockchip/rk3399-boocax-c50.dtb"
+cmp "$dtb" "$board_boot/dtb/rockchip/rk3399-boocax-c50.dtb"
+
+test "$(fdtget -t s "$dtb" / model)" = 'BooCax C50 V1.0'
+for address in fe300000 fe310000 fe320000 fe330000 ff180000 ff940000 fe380000 fe3e0000; do
+    node="$(fdtget -l "$dtb" / | grep "@${address}$")"
+    test "$(fdtget -t s "$dtb" "/$node" status)" = 'okay'
+    printf '%s enabled\n' "$node"
+done
+test "$(fdtget -t s "$dtb" /mmc@fe310000/wifi@1 compatible)" = 'brcm,bcm4356-fmac brcm,bcm4329-fmac'
+test "$(fdtget -t s "$dtb" /serial@ff180000/bluetooth compatible)" = 'brcm,bcm43438-bt'
+test "$(fdtget -t u "$dtb" /ethernet@fe300000/mdio/ethernet-phy@0 reg)" = '0'
+test "$(fdtget -t u "$dtb" /ethernet@fe300000/mdio reset-post-delay-us)" = '50000'
+test "$(fdtget -t s "$dtb" /gpio-leds/led-red default-state)" = 'on'
+test "$(fdtget -t s "$dtb" /gpio-leds/led-green default-state)" = 'off'
+test "$(fdtget -t s "$dtb" /i2c@ff110000/audio-codec@1a compatible)" = 'realtek,rt5651'
+for address in fe800000 fe900000; do
+    test "$(fdtget -t s "$dtb" "/usb@$address" status)" = 'okay'
+    test "$(fdtget -t s "$dtb" "/usb@$address/usb@$address" status)" = 'okay'
+    test "$(fdtget -t s "$dtb" "/usb@$address/usb@$address" dr_mode)" = 'host'
+    printf 'USB3 host at %s enabled\n' "$address"
+done
+emmc_phy_handle="$(fdtget -t x "$dtb" /mmc@fe330000 phys)"
+syscon="$(fdtget -l "$dtb" / | grep '@ff770000$')"
+test "$(fdtget -t x "$dtb" "/$syscon/phy@f780" phandle)" = "$emmc_phy_handle"
+test "$(fdtget -t s "$dtb" "/$syscon/phy@f780" status)" = 'okay'
+
+configs=("$boot_mount"/config-6.18.60*)
+test "${#configs[@]}" -eq 1
+for option in \
+    'CONFIG_DWMAC_ROCKCHIP=y' 'CONFIG_MMC_DW_ROCKCHIP=y' \
+    'CONFIG_BRCMFMAC=m' 'CONFIG_BRCMFMAC_SDIO=y' \
+    'CONFIG_BT_HCIUART=m' 'CONFIG_BT_HCIUART_BCM=y' \
+    'CONFIG_TUN=m'; do
+    grep -Fx "$option" "${configs[0]}"
+done
+fw="$root_mount/usr/lib/firmware/brcm"
+printf '%s\n' \
+    "6154b2e7b14e3e4474c7f047cb13f0cb7c3f9d2e8fc1307bb09113250ef3d7cf  $fw/brcmfmac4356-sdio.bin" \
+    "d2e459c84e062a60d6db4b618016748a2bc27cfe6bc86c15acf86f63db4fce6f  $fw/brcmfmac4356-sdio.txt" \
+    "f1daa6ab28699b72c8e47a34f43c095941c9aa542d0a5f4b55baebc5fd1aae99  $fw/BCM4356A2.hcd" |
+    sha256sum --check
 root_uuid="$(sudo blkid -s UUID -o value "${loop}p2")"
 grep -F "UUID=$root_uuid" "$boot_mount/extlinux/extlinux.conf"
-sudo umount "$boot_mount"
-sudo losetup -d "$loop"
-rmdir "$boot_mount"
+cleanup
 trap - EXIT
 rm -f "$image"
 cp "$compressed" "$output/"
