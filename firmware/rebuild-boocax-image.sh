@@ -30,11 +30,19 @@ echo "9ef973264f74ca0804f8bdf941f450741394cb251da484d4f3d2355145dbd24d  build/ou
 gzip -d "build/output/images/$base"
 sudo ./rebuild -b boocax-c50 -r ophub/kernel -u stable -k "$kernel" -a false -s 3000
 shopt -s nullglob
-images=(build/output/images/*_rockchip_boocax-c50_*.img)
-test "${#images[@]}" -eq 1
-image="${images[0]}"
+images=(build/output/images/*_rockchip_boocax-c50_*.img.gz)
+if [[ "${#images[@]}" -ne 1 ]]; then
+    echo "Expected one compressed BooCax image in the rebuild output" >&2
+    ls -lh build/output/images
+    exit 1
+fi
+compressed="${images[0]}"
+image="$RUNNER_TEMP/boocax-verification.img"
+pigz -dc "$compressed" > "$image"
+parted -ms "$image" unit s print
 boot_bytes="$(stat -c %s "$firmware/u-boot-rockchip.bin")"
 cmp -n "$boot_bytes" -i 32768:0 "$image" "$firmware/u-boot-rockchip.bin"
+echo "Verified $boot_bytes U-Boot bytes at LBA 64"
 loop="$(sudo losetup --find --show --partscan --read-only "$image")"
 boot_mount="$(mktemp -d)"
 cleanup() {
@@ -53,6 +61,7 @@ sudo umount "$boot_mount"
 sudo losetup -d "$loop"
 rmdir "$boot_mount"
 trap - EXIT
-pigz -c "$image" > "$output/${image##*/}.gz"
+rm -f "$image"
+cp "$compressed" "$output/"
 cd "$output"
 sha256sum ./*.img.gz > SHA256SUMS
