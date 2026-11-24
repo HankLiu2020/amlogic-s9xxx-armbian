@@ -21,7 +21,8 @@ sed '/^[[:space:]]*APPEND[[:space:]]/ s/$/ cpufreq.off=1/' \
 kernel_dir="$RUNNER_TEMP/linux-${kernel}"
 curl -fsSL --retry 3 "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${kernel}.tar.xz" -o "$RUNNER_TEMP/kernel.tar.xz"
 tar -xJf "$RUNNER_TEMP/kernel.tar.xz" -C "$RUNNER_TEMP" \
-    "linux-${kernel}/arch/arm64/boot/dts/rockchip" "linux-${kernel}/include/dt-bindings"
+    "linux-${kernel}/arch/arm64/boot/dts/rockchip" "linux-${kernel}/include/dt-bindings" \
+    "linux-${kernel}/sound/soc/codecs/"{rt5651.c,rt5651.h,rl6231.c,rl6231.h}
 rm -f "$RUNNER_TEMP/kernel.tar.xz"
 cpp -nostdinc -undef -D__DTS__ -x assembler-with-cpp \
     -I "$kernel_dir/include" -I "$kernel_dir/arch/arm64/boot/dts/rockchip" \
@@ -48,7 +49,7 @@ parted -ms "$image" unit s print
 boot_bytes="$(stat -c %s "$firmware/u-boot-rockchip.bin")"
 cmp -n "$boot_bytes" -i 32768:0 "$image" "$firmware/u-boot-rockchip.bin"
 echo "Verified $boot_bytes U-Boot bytes at LBA 64"
-loop="$(sudo losetup --find --show --partscan --read-only "$image")"
+loop="$(sudo losetup --find --show --partscan "$image")"
 boot_mount="$(mktemp -d)"
 root_mount="$(mktemp -d)"
 cleanup() {
@@ -59,7 +60,7 @@ cleanup() {
 }
 trap cleanup EXIT
 sudo mount -o ro "${loop}p1" "$boot_mount"
-sudo mount -o ro,noload "${loop}p2" "$root_mount"
+sudo mount "${loop}p2" "$root_mount"
 grep -F 'rk3399-boocax-c50.dtb' "$boot_mount/extlinux/extlinux.conf"
 grep -Fw 'cpufreq.off=1' "$boot_mount/extlinux/extlinux.conf"
 dtb="$boot_mount/dtb/rockchip/rk3399-boocax-c50.dtb"
@@ -91,13 +92,48 @@ test "$(fdtget -t s "$dtb" "/$syscon/phy@f780" status)" = 'okay'
 
 configs=("$boot_mount"/config-6.18.60*)
 test "${#configs[@]}" -eq 1
+config="${configs[0]}"
 for option in \
     'CONFIG_DWMAC_ROCKCHIP=y' 'CONFIG_MMC_DW_ROCKCHIP=y' \
     'CONFIG_BRCMFMAC=m' 'CONFIG_BRCMFMAC_SDIO=y' \
     'CONFIG_BT_HCIUART=m' 'CONFIG_BT_HCIUART_BCM=y' \
     'CONFIG_TUN=m'; do
-    grep -Fx "$option" "${configs[0]}"
+    grep -Fx "$option" "$config"
 done
+for option in COMMON_CLK_RK808 LEDS_GPIO PHY_ROCKCHIP_EMMC USB_DWC3 \
+    USB_DWC3_OF_SIMPLE USB_XHCI_HCD PHY_ROCKCHIP_TYPEC DRM_ROCKCHIP \
+    ROCKCHIP_DW_HDMI SND_SOC_ROCKCHIP_I2S SND_SIMPLE_CARD; do
+    grep -Ex "CONFIG_$option=[ym]" "$config"
+done
+
+if ! grep -Eq '^CONFIG_SND_SOC_RT5651=[ym]$' "$config"; then
+    release="${config##*/config-}"
+    headers="$root_mount/usr/src/linux-headers-$release"
+    test -s "$headers/Module.symvers"
+    if grep -Fxq 'CONFIG_MODULE_SIG_FORCE=y' "$config"; then
+        echo "The base kernel requires a signed RT5651 module" >&2
+        exit 1
+    fi
+    codec="$kernel_dir/sound/soc/codecs"
+    cat > "$codec/Makefile" <<'KBUILD'
+obj-m += snd-soc-rt5651.o
+snd-soc-rt5651-y := rt5651.o
+KBUILD
+    if ! grep -Eq '^CONFIG_SND_SOC_RL6231=[ym]$' "$config"; then
+        cat >> "$codec/Makefile" <<'KBUILD'
+obj-m += snd-soc-rl6231.o
+snd-soc-rl6231-y := rl6231.o
+KBUILD
+    fi
+    make -C "$headers" M="$codec" LLVM=1 ARCH=arm64 -j"$(nproc)" modules
+    modinfo -F vermagic "$codec/snd-soc-rt5651.ko" | grep -F "$release "
+    modinfo -F alias "$codec/snd-soc-rt5651.ko" | grep -F 'realtek,rt5651'
+    sudo install -d "$root_mount/usr/lib/modules/$release/updates/boocax"
+    sudo install -m 644 "$codec"/*.ko "$root_mount/usr/lib/modules/$release/updates/boocax/"
+    sudo depmod -b "$root_mount" "$release"
+    grep -F 'updates/boocax/snd-soc-rt5651.ko:' "$root_mount/usr/lib/modules/$release/modules.dep"
+fi
+
 fw="$root_mount/usr/lib/firmware/brcm"
 printf '%s\n' \
     "6154b2e7b14e3e4474c7f047cb13f0cb7c3f9d2e8fc1307bb09113250ef3d7cf  $fw/brcmfmac4356-sdio.bin" \
@@ -108,7 +144,7 @@ root_uuid="$(sudo blkid -s UUID -o value "${loop}p2")"
 grep -F "UUID=$root_uuid" "$boot_mount/extlinux/extlinux.conf"
 cleanup
 trap - EXIT
+pigz -c "$image" > "$output/${compressed##*/}"
 rm -f "$image"
-cp "$compressed" "$output/"
 cd "$output"
 sha256sum ./*.img.gz > SHA256SUMS

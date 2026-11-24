@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   package:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -22,9 +22,9 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            bc btrfs-progs curl device-tree-compiler dosfstools e2fsprogs gdisk \
-            jq lz4 parted pigz pv qemu-user-static rsync u-boot-tools unzip \
-            uuid-runtime xz-utils zstd
+            bc bison btrfs-progs clang curl device-tree-compiler dosfstools \
+            e2fsprogs flex gdisk jq kmod libelf-dev libssl-dev lld llvm lz4 \
+            make parted pigz pv rsync u-boot-tools unzip uuid-runtime xz-utils zstd
       - name: Fetch the pinned BooCax U-Boot and board source
         shell: bash
         run: |
