@@ -125,7 +125,14 @@ obj-m += snd-soc-rl6231.o
 snd-soc-rl6231-y := rl6231.o
 KBUILD
     fi
-    make -C "$headers" M="$codec" LLVM=1 ARCH=arm64 -j"$(nproc)" modules
+    toolchain=arm-gnu-toolchain-15.3.rel1-aarch64-aarch64-none-linux-gnu
+    curl -fsSL --retry 3 "https://github.com/ophub/kernel/releases/download/toolchain/$toolchain.tar.xz" \
+        -o "$RUNNER_TEMP/$toolchain.tar.xz"
+    echo "8020be7aa1013704756158400cb5ba438d6f09b2909795d13617b9e7bac53286  $RUNNER_TEMP/$toolchain.tar.xz" |
+        sha256sum --check
+    tar -xJf "$RUNNER_TEMP/$toolchain.tar.xz" -C "$RUNNER_TEMP"
+    cross_compile="$RUNNER_TEMP/$toolchain/bin/aarch64-none-linux-gnu-"
+    make -C "$headers" M="$codec" CROSS_COMPILE="$cross_compile" ARCH=arm64 -j"$(nproc)" modules
     modinfo -F vermagic "$codec/snd-soc-rt5651.ko" | grep -F "$release "
     modinfo -F alias "$codec/snd-soc-rt5651.ko" | grep -F 'realtek,rt5651'
     sudo install -d "$root_mount/usr/lib/modules/$release/updates/boocax"
