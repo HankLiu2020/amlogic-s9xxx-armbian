@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: (GPL-2.0-or-later OR MIT)
+#include "rk3399-boocax-c50.dts"
+
+/ {
+	aliases {
+		ethernet0 = &gmac;
+	};
+
+	clkin_gmac: external-gmac-clock {
+		compatible = "fixed-clock";
+		clock-frequency = <125000000>;
+		clock-output-names = "clkin_gmac";
+		#clock-cells = <0>;
+	};
+
+	vcc_phy: regulator-vcc-phy {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_phy";
+		gpio = <&gpio1 RK_PB5 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+	};
+};
+
+&i2c0 {
+	pmic@1c {
+		regulators {
+			DCDC_REG1 {
+				regulator-name = "vdd_cpu_l";
+				regulator-always-on;
+			};
+			DCDC_REG2 {
+				regulator-name = "vdd_center";
+				regulator-always-on;
+			};
+			DCDC_REG3 {
+				regulator-name = "vcc_ddr";
+				regulator-always-on;
+			};
+			DCDC_REG4 {
+				regulator-name = "vcc_1v8";
+				regulator-always-on;
+			};
+			LDO_REG1 {
+				regulator-name = "vcca3v0_codec";
+				regulator-always-on;
+			};
+			LDO_REG2 {
+				regulator-name = "vcc3v0_tp";
+				regulator-always-on;
+			};
+			LDO_REG3 {
+				regulator-name = "vcca1v8_codec";
+				regulator-always-on;
+			};
+			LDO_REG4 {
+				regulator-name = "vcc_power_on";
+				regulator-always-on;
+			};
+			LDO_REG5 {
+				regulator-name = "vcc_3v0";
+				regulator-always-on;
+			};
+			LDO_REG6 {
+				regulator-name = "vcc_1v5";
+				regulator-always-on;
+			};
+			LDO_REG7 {
+				regulator-name = "vcc1v8_dvp";
+				regulator-always-on;
+			};
+			LDO_REG8 {
+				regulator-name = "vcc3v3_s3";
+				regulator-always-on;
+			};
+			LDO_REG9 {
+				regulator-always-on;
+			};
+			SWITCH_REG {
+				regulator-name = "vcc3v3_s0";
+				regulator-always-on;
+			};
+		};
+	};
+};
+
+&gmac {
+	assigned-clocks = <&cru SCLK_RMII_SRC>;
+	assigned-clock-parents = <&clkin_gmac>;
+	clock_in_out = "input";
+	phy-mode = "rgmii";
+	phy-handle = <&gmac_phy>;
+	phy-supply = <&vcc_phy>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&rgmii_pins>;
+	tx_delay = <0x28>;
+	rx_delay = <0x11>;
+	status = "okay";
+
+	mdio {
+		compatible = "snps,dwmac-mdio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		gmac_phy: ethernet-phy@0 {
+			reg = <0>;
+			reset-gpios = <&gpio3 RK_PB7 GPIO_ACTIVE_LOW>;
+			reset-assert-us = <10000>;
+			reset-deassert-us = <50000>;
+		};
+	};
+};

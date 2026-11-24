@@ -1,0 +1,49 @@
+name: Package BooCax C50 Armbian lab image
+
+on:
+  push:
+    branches: [codex/boocax-c50]
+    paths:
+      - '.github/workflows/build-boocax-armbian.yml'
+      - 'firmware/**'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install tools for device-tree and Rockchip image packaging
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc btrfs-progs curl device-tree-compiler dosfstools e2fsprogs gdisk \
+            jq lz4 parted pigz pv qemu-user-static rsync u-boot-tools unzip \
+            uuid-runtime xz-utils zstd
+      - name: Fetch the pinned BooCax U-Boot and board source
+        shell: bash
+        run: |
+          source firmware/boocax-boot-inputs
+          origin="https://raw.githubusercontent.com/HankLiu2020/RK3399-BooCax/$FIRMWARE_COMMIT/firmware/boocax-c50"
+          mkdir -p "$RUNNER_TEMP/bootlab" "$RUNNER_TEMP/packed"
+          curl -fsSL --retry 3 "$origin/lab/boocax-c50-uboot-v2026.10-lab.zip" -o "$RUNNER_TEMP/bootlab.zip"
+          echo "$FIRMWARE_ZIP_SHA256  $RUNNER_TEMP/bootlab.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/bootlab.zip" 'u-boot-rockchip.bin' 'SHA256SUMS' -d "$RUNNER_TEMP/bootlab"
+          curl -fsSL --retry 3 "$origin/rk3399-boocax-c50.dts" -o "$RUNNER_TEMP/bootlab/rk3399-boocax-c50.dts"
+          cd "$RUNNER_TEMP/bootlab"
+          sha256sum --ignore-missing --check SHA256SUMS
+      - name: Rebuild and verify the boot partition
+        shell: bash
+        run: bash firmware/rebuild-boocax-image.sh "$RUNNER_TEMP/bootlab" "$RUNNER_TEMP/packed"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: boocax-c50-armbian-trixie-6.18.60-lab
+          path: ${{ runner.temp }}/packed/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
