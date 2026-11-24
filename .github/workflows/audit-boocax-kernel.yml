@@ -1,0 +1,68 @@
+name: Audit BooCax Armbian kernel and DTB
+
+on:
+  push:
+    branches: [codex/boocax-c50]
+    paths:
+      - '.github/workflows/audit-boocax-kernel.yml'
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  inspect-image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Download the exact previously packaged image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP"
+          mkdir audit
+          gh run download 45397873094 --repo "$GITHUB_REPOSITORY" \
+            --name boocax-c50-armbian-trixie-6.18.60-lab --dir audit
+          cd audit
+          sha256sum -c SHA256SUMS
+          gzip -dc -- ./*.img.gz > "$RUNNER_TEMP/boocax-audit.img"
+      - name: Inspect kernel config, bindings and packaged firmware
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq device-tree-compiler
+          loop="$(sudo losetup --find --show --partscan --read-only "$RUNNER_TEMP/boocax-audit.img")"
+          boot="$(mktemp -d)"
+          root="$(mktemp -d)"
+          cleanup() {
+            if mountpoint -q "$root"; then sudo umount "$root"; fi
+            if mountpoint -q "$boot"; then sudo umount "$boot"; fi
+            sudo losetup -d "$loop"
+          }
+          trap cleanup EXIT
+          sudo mount -o ro,noload "${loop}p2" "$root"
+          sudo mount -o ro "${loop}p1" "$boot"
+          printf '\n[KERNEL CONFIG]\n'
+          shopt -s nullglob
+          configs=("$boot"/config-6.18.60*)
+          if [[ "${#configs[@]}" -ne 1 ]]; then
+            printf 'Expected one matching boot config\n'
+            ls -la "$boot"
+            exit 1
+          fi
+          flags='TUN|MMC_DW_ROCKCHIP|MMC_SDHCI_OF_ARASAN|BRCMFMAC|BRCMFMAC_SDIO|BRCMFMAC_PCIE|BT_HCIUART|BT_HCIUART_BCM|STMMAC|STMMAC_ETH|DWMAC_ROCKCHIP|REALTEK_PHY|NET_DSA|NET_DSA_REALTEK|NET_DSA_REALTEK_MDIO|NET_DSA_REALTEK_SMI|NET_DSA_REALTEK_RTL8365MB'
+          grep -E "^(CONFIG_(${flags})=|# CONFIG_(${flags}) is not set)" "${configs[0]}"
+          printf '\n[WI-FI AND ETHERNET DT NODES]\n'
+          dtb="$boot/dtb/rockchip/rk3399-boocax-c50.dtb"
+          for address in fe300000 fe310000 fe320000 fe330000; do
+            node="$(fdtget -l "$dtb" / | grep "@${address}$")"
+            printf '%s status=' "$node"
+            fdtget -t s "$dtb" "/$node" status
+            fdtget -l "$dtb" "/$node"
+          done
+          printf '\n[WI-FI AND PHY MODULES]\n'
+          sudo find "$root/usr/lib/modules" -type f \
+            \( -name 'brcmfmac.ko*' -o -name 'dwmac-rk.ko*' -o -name 'realtek.ko*' \) -printf '%f\n'
+          printf '\n[4356 FIRMWARE FILENAMES]\n'
+          sudo find "$root/usr/lib/firmware" -iname '*4356*' -printf '%P\n' | sort
